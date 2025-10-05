@@ -35,9 +35,22 @@ public class McpClient : IDisposable
             }
         };
 
+        // Capture stderr for debugging (server logs)
+        _serverProcess.ErrorDataReceived += (sender, e) =>
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                Console.WriteLine($"[Server Log] {e.Data}");
+            }
+        };
+
         _serverProcess.Start();
+        _serverProcess.BeginErrorReadLine(); // Start reading stderr asynchronously
+
         _stdin = _serverProcess.StandardInput;
         _stdout = _serverProcess.StandardOutput;
+
+        Console.WriteLine("[Client] MCP Server process started");
     }
 
     public async Task<JsonDocument> InitializeAsync()
@@ -107,10 +120,16 @@ public class McpClient : IDisposable
     private async Task<JsonDocument> SendRequestAsync(object request)
     {
         var json = JsonSerializer.Serialize(request, _jsonOptions);
+
+        Console.WriteLine($"[Client] Sending: {json.Substring(0, Math.Min(100, json.Length))}...");
+
         await _stdin.WriteLineAsync(json);
         await _stdin.FlushAsync();
 
         var response = await _stdout.ReadLineAsync();
+
+        Console.WriteLine($"[Client] Received: {response?.Substring(0, Math.Min(100, response?.Length ?? 0))}...");
+
         if (string.IsNullOrEmpty(response))
             throw new Exception("Empty response from server");
 
@@ -136,7 +155,7 @@ public class ClientExample
 {
     public static async Task Main(string[] args)
     {
-        var serverPath = args.Length > 0 ? args[0] : "./ExcelMcpServer";
+        var serverPath = args.Length > 0 ? args[0] : @"C:\Prabhakar\MCP\ExcelMcpServer\bin\Debug\net9.0\ExcelMcpServer.exe";
 
         using var client = new McpClient(serverPath);
 

@@ -13,9 +13,17 @@ class Program
         {
             var builder = Host.CreateApplicationBuilder(args);
 
-            // Configure logging
+            // Configure logging - CRITICAL: MCP servers must log to STDERR only
             builder.Logging.ClearProviders();
-            builder.Logging.AddConsole();
+            builder.Logging.AddSimpleConsole(options =>
+            {
+                options.SingleLine = true;
+            });
+            builder.Logging.AddConsole(options =>
+            {
+                // Force all logs to stderr for MCP compatibility
+                options.LogToStandardErrorThreshold = LogLevel.Trace;
+            });
             builder.Logging.SetMinimumLevel(LogLevel.Information);
 
             // Register services

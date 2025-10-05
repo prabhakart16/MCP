@@ -18,7 +18,7 @@ public class McpServerService
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true
+            WriteIndented = false
         };
     }
 
@@ -40,10 +40,16 @@ public class McpServerService
                 AutoFlush = true
             };
 
+            // Log to stderr only (not stdout)
+            Console.Error.WriteLine("[MCP Server] Started and listening for requests...");
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 var line = await reader.ReadLineAsync(cancellationToken);
                 if (string.IsNullOrEmpty(line)) continue;
+
+                // Log incoming requests to stderr
+                Console.Error.WriteLine($"[MCP Server] Received: {line.Substring(0, Math.Min(100, line.Length))}...");
 
                 try
                 {
@@ -53,6 +59,10 @@ public class McpServerService
                     var response = await HandleMcpRequestAsync(request);
                     var responseJson = JsonSerializer.Serialize(response, _jsonOptions);
 
+                    // Log outgoing responses to stderr
+                    Console.Error.WriteLine($"[MCP Server] Sending: {responseJson.Substring(0, Math.Min(100, responseJson.Length))}...");
+
+                    // ONLY JSON responses go to stdout
                     await writer.WriteLineAsync(responseJson);
                 }
                 catch (Exception ex)
@@ -106,7 +116,7 @@ public class McpServerService
                 case "tools/list":
                     response.Result = new
                     {
-                        tools = new[]
+                        tools = new object[]
                         {
                             new
                             {
