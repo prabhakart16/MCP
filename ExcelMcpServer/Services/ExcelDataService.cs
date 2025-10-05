@@ -112,38 +112,40 @@ public class ExcelDataService
             IEnumerable<LoanRecord> results;
             string queryType;
 
-            // Natural language query parsing
+            // Enhanced natural language query parsing
             if (query.Contains("mismatch") || query.Contains("reconcile") ||
-                query.Contains("difference") && !query.Contains("where"))
+                (query.Contains("difference") && !query.Contains("where") && !query.Contains(">")))
             {
                 queryType = "FindMismatches";
                 results = _mismatchCache;
             }
-            else if (query.Contains("difference") && query.Contains(">"))
+            else if (query.Contains("difference") && (query.Contains(">") || query.Contains("greater")))
             {
                 queryType = "DifferenceGreaterThan";
                 var threshold = ExtractNumber(query);
                 results = _cachedData.Where(r => r.DifferenceAmount > threshold);
             }
-            else if (query.Contains("difference") && query.Contains("<"))
+            else if (query.Contains("difference") && (query.Contains("<") || query.Contains("less")))
             {
                 queryType = "DifferenceLessThan";
                 var threshold = ExtractNumber(query);
                 results = _cachedData.Where(r => r.DifferenceAmount < threshold);
             }
-            else if (query.Contains("reconciled"))
+            else if (query.Contains("reconciled") && !query.Contains("un") && !query.Contains("not"))
             {
                 queryType = "ReconciledLoans";
                 results = _cachedData.Where(r =>
                     r.ReconciledStatus.Equals("reconciled", StringComparison.OrdinalIgnoreCase));
             }
-            else if (query.Contains("unreconciled") || query.Contains("not reconciled"))
+            else if (query.Contains("unreconciled") || query.Contains("not reconciled") || query.Contains("pending"))
             {
                 queryType = "UnreconciledLoans";
                 results = _cachedData.Where(r =>
                     !r.ReconciledStatus.Equals("reconciled", StringComparison.OrdinalIgnoreCase));
             }
-            else if (query.Contains("loan") && query.Contains("id"))
+            else if ((query.Contains("loan") && (query.Contains("id") || query.Contains("number"))) ||
+                     System.Text.RegularExpressions.Regex.IsMatch(query, @"\bLN-?\d+\b",
+                         System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
                 queryType = "LoanByID";
                 var loanId = ExtractLoanId(query);
@@ -151,23 +153,90 @@ public class ExcelDataService
                     ? new[] { _loanIndex[loanId] }
                     : Array.Empty<LoanRecord>();
             }
-            else if (query.Contains("borrower"))
+            else if (query.Contains("borrower") || query.Contains("customer") || query.Contains("name"))
             {
                 queryType = "SearchByBorrower";
                 var borrowerName = ExtractBorrowerName(query);
-                results = _cachedData.Where(r =>
-                    r.BorrowerName.Contains(borrowerName, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(borrowerName))
+                {
+                    results = _cachedData.Where(r =>
+                        r.BorrowerName.Contains(borrowerName, StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    results = Array.Empty<LoanRecord>();
+                    response.Message = "Please specify a borrower name to search for.";
+                }
             }
-            else if (query.Contains("all") || query.Contains("list"))
+            else if (query.Contains("top") || query.Contains("highest") || query.Contains("largest"))
+            {
+                queryType = "TopDifferences";
+                var count = ExtractNumber(query);
+                if (count == 0) count = 10;
+                results = _cachedData
+                    .OrderByDescending(r => Math.Abs(r.DifferenceAmount))
+                    .Take((int)count);
+            }
+            else if (query.Contains("bottom") || query.Contains("lowest") || query.Contains("smallest"))
+            {
+                queryType = "BottomDifferences";
+                var count = ExtractNumber(query);
+                if (count == 0) count = 10;
+                results = _cachedData
+                    .Where(r => r.DifferenceAmount != 0)
+                    .OrderBy(r => Math.Abs(r.DifferenceAmount))
+                    .Take((int)count);
+            }
+            else if (query.Contains("positive") && query.Contains("difference"))
+            {
+                queryType = "PositiveDifferences";
+                results = _cachedData.Where(r => r.DifferenceAmount > 0);
+            }
+            else if (query.Contains("negative") && query.Contains("difference"))
+            {
+                queryType = "NegativeDifferences";
+                results = _cachedData.Where(r => r.DifferenceAmount < 0);
+            }
+            else if (query.Contains("servicer") && query.Contains("greater") ||
+                     query.Contains("servicer") && query.Contains("more"))
+            {
+                queryType = "ServicerGreaterThanFNMA";
+                results = _cachedData.Where(r => r.Servicer_LoanAmount > r.FNMA_LoanAmount);
+            }
+            else if (query.Contains("fnma") && query.Contains("greater") ||
+                     query.Contains("fnma") && query.Contains("more"))
+            {
+                queryType = "FNMAGreaterThanServicer";
+                results = _cachedData.Where(r => r.FNMA_LoanAmount > r.Servicer_LoanAmount);
+            }
+            else if (query.Contains("count") || query.Contains("how many") || query.Contains("total"))
+            {
+                queryType = "Count";
+                results = _cachedData;
+                response.Message = $"Total count: {_cachedData.Count:N0} records";
+            }
+            else if (query.Contains("all") || query.Contains("list") || query.Contains("show") || query.Contains("everything"))
             {
                 queryType = "ListAll";
                 results = _cachedData;
+            }
+            else if (query.Contains("summary") || query.Contains("overview") || query.Contains("report"))
+            {
+                queryType = "Summary";
+                results = _cachedData.Take(10); // Sample
+                response.Message = GetSummaryMessage();
             }
             else
             {
                 queryType = "Unknown";
                 results = Array.Empty<LoanRecord>();
-                response.Message = "Query not understood. Try: 'find mismatches', 'difference > 1000', 'reconciled loans', etc.";
+                response.Message = "I didn't understand that query. Try:\n" +
+                    "• 'Find mismatches'\n" +
+                    "• 'Show loans where difference > 5000'\n" +
+                    "• 'List unreconciled loans'\n" +
+                    "• 'Find loan LN-12345'\n" +
+                    "• 'Search borrower John Smith'\n" +
+                    "Type 'help' for more examples.";
             }
 
             var resultList = results.ToList();
@@ -186,7 +255,10 @@ public class ExcelDataService
                 Statistics = BuildStatistics(resultList)
             };
 
-            response.Message = $"Found {response.TotalCount} records matching query";
+            if (string.IsNullOrEmpty(response.Message))
+            {
+                response.Message = $"Found {response.TotalCount:N0} records matching query";
+            }
         }
         catch (Exception ex)
         {
@@ -196,6 +268,16 @@ public class ExcelDataService
         }
 
         return response;
+    }
+
+    private string GetSummaryMessage()
+    {
+        var total = _cachedData.Count;
+        var mismatches = _mismatchCache.Count;
+        var reconciled = _cachedData.Count(r =>
+            r.ReconciledStatus.Equals("reconciled", StringComparison.OrdinalIgnoreCase));
+
+        return $"Dataset Summary: {total:N0} total loans, {mismatches:N0} mismatches ({(mismatches * 100.0 / total):F1}%), {reconciled:N0} reconciled";
     }
 
     private Dictionary<string, object> BuildStatistics(List<LoanRecord> data)
